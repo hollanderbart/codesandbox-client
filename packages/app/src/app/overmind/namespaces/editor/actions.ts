@@ -9,7 +9,6 @@ import {
   WindowOrientation,
 } from '@codesandbox/common/lib/types';
 import { getTextOperation } from '@codesandbox/common/lib/utils/diff';
-import { COMMENTS } from '@codesandbox/common/lib/utils/feature-flags';
 import { convertTypeToStatus } from '@codesandbox/common/lib/utils/notifications';
 import { hasPermission } from '@codesandbox/common/lib/utils/permission';
 import { signInPageUrl } from '@codesandbox/common/lib/utils/url-generator';
@@ -126,12 +125,9 @@ export const sandboxChanged: AsyncAction<{ id: string }> = withLoadApp<{
         invitationToken,
       });
 
-      // Timeout to prevent that we load the whole sandbox twice at the same time
-      setTimeout(() => {
-        // Remove the invite from the url
-        url.searchParams.delete('ts');
-        history.replace(url.pathname);
-      }, 3000);
+      // Remove the invite from the url
+      url.searchParams.delete('ts');
+      history.replace(url.href);
     } catch (error) {
       if (
         !error.message.includes('Cannot redeem token, invitation not found')
@@ -203,25 +199,15 @@ export const sandboxChanged: AsyncAction<{ id: string }> = withLoadApp<{
   effects.vscode.openModule(state.editor.currentModule);
   effects.preview.executeCodeImmediately({ initialRender: true });
 
-  if (COMMENTS) {
-    try {
-      const { comments } = await effects.fakeGql.queries.allComments({
-        sandboxId: sandbox.id,
-      });
+  const { comments } = await effects.fakeGql.queries.allComments({
+    sandboxId: sandbox.id,
+  });
 
-      state.editor.comments[sandbox.id] = comments.reduce((aggr, comment) => {
-        aggr[comment.id] = comment;
+  state.editor.comments[sandbox.id] = comments.reduce((aggr, comment) => {
+    aggr[comment.id] = comment;
 
-        return aggr;
-      }, {});
-    } catch (e) {
-      state.editor.comments[sandbox.id] = {};
-      effects.notificationToast.add({
-        status: NotificationStatus.NOTICE,
-        message: `There as a problem getting the sandbox comments`,
-      });
-    }
-  }
+    return aggr;
+  }, {});
 
   state.editor.isLoading = false;
 });
@@ -1085,35 +1071,35 @@ export const listenToSandboxChanges: AsyncAction<{
 }> = async ({ state, actions, effects }, { sandboxId }) => {
   effects.gql.subscriptions.onSandboxChangged.dispose();
 
-  if (!state.isLoggedIn) {
-    return;
-  }
+  try {
+    effects.gql.subscriptions.onSandboxChangged({ sandboxId }, result => {
+      const sandbox = state.editor.sandboxes[sandboxId];
 
-  effects.gql.subscriptions.onSandboxChangged({ sandboxId }, result => {
-    const sandbox = state.editor.sandboxes[sandboxId];
+      if (sandbox) {
+        const newInfo = result.sandboxChanged;
+        sandbox.privacy = newInfo.privacy as 0 | 1 | 2;
 
-    if (sandbox) {
-      const newInfo = result.sandboxChanged;
-      sandbox.privacy = newInfo.privacy as 0 | 1 | 2;
+        const authorization = convertAuthorizationToPermissionType(
+          newInfo.authorization
+        );
 
-      const authorization = convertAuthorizationToPermissionType(
-        newInfo.authorization
-      );
+        if (authorization !== sandbox.authorization) {
+          sandbox.authorization = authorization;
 
-      if (authorization !== sandbox.authorization) {
-        sandbox.authorization = authorization;
-
-        actions.refetchSandboxInfo();
+          actions.refetchSandboxInfo();
+        }
       }
-    }
-  });
+    });
+  } catch {
+    // Unable to connect to websocket, what to do?
+  }
 };
 
 export const loadCollaborators: AsyncAction<{ sandboxId: string }> = async (
   { state, effects },
   { sandboxId }
 ) => {
-  if (!state.editor.currentSandbox || !state.isLoggedIn) {
+  if (!state.editor.currentSandbox) {
     return;
   }
 
@@ -1129,9 +1115,10 @@ export const loadCollaborators: AsyncAction<{ sandboxId: string }> = async (
       sandboxId,
     });
     if (!collaboratorResponse.sandbox) {
-      return;
+      // empty
     }
 
+    // @ts-ignore
     state.editor.collaborators = collaboratorResponse.sandbox.collaborators;
 
     effects.gql.subscriptions.onCollaboratorAdded({ sandboxId }, event => {
@@ -1253,7 +1240,6 @@ export const addCollaborator: AsyncAction<{
       username,
       avatarUrl: '',
     },
-    warning: null,
   };
 
   state.editor.collaborators = [...state.editor.collaborators, newCollaborator];
@@ -1377,18 +1363,12 @@ export const getComment: AsyncAction<{
   id: string;
   sandboxId: string;
 }> = async ({ state, effects }, { sandboxId, id }) => {
-  try {
-    const { comment } = await effects.fakeGql.queries.comment({
-      sandboxId,
-      id,
-    });
+  const { comment } = await effects.fakeGql.queries.comment({
+    sandboxId,
+    id,
+  });
 
-    state.editor.comments[sandboxId][id] = comment;
-  } catch (e) {
-    effects.notificationToast.error(
-      'Unable to get your comment, please try again'
-    );
-  }
+  state.editor.comments[sandboxId][id] = comment;
 };
 
 export const selectComment: Action<string> = ({ state }, id) => {
@@ -1401,69 +1381,66 @@ export const addComment: AsyncAction<{
   username: string;
   open?: boolean;
 }> = async ({ state, effects, actions }, { sandboxId, comment, username }) => {
-  if (!state.user) {
-    return;
-  }
-
   const id = `${comment}-${username}`;
-  const optimisticComment = {
-    id,
-    insertedAt: new Date().toString(),
-    isResolved: false,
-    originalMessage: {
+  if (state.user) {
+    const optimisticComment = {
       id,
-      content: comment,
-      author: {
-        id: state.user.id,
-        username,
-        avatarUrl: state.user.avatarUrl,
+      insertedAt: new Date().toString(),
+      isResolved: false,
+      originalMessage: {
+        id,
+        content: comment,
+        author: {
+          id: state.user.id,
+          username,
+          avatarUrl: state.user.avatarUrl,
+        },
       },
-    },
-    replies: [],
-  };
-  // @ts-ignore
-  state.editor.comments[sandboxId][id] = optimisticComment;
-  state.editor.selectedCommentsFilter = CommentsFilterOption.OPEN;
-  try {
-    const {
-      addComment: newComment,
-    } = await effects.fakeGql.mutations.addComment({
-      sandboxId,
-      comment,
-      username,
-    });
+      replies: [],
+    };
+    // @ts-ignore
+    state.editor.comments[sandboxId][id] = optimisticComment;
+    state.editor.selectedCommentsFilter = CommentsFilterOption.OPEN;
+    try {
+      const {
+        addComment: newComment,
+      } = await effects.fakeGql.mutations.addComment({
+        sandboxId,
+        comment,
+        username,
+      });
 
-    delete state.editor.comments[sandboxId][id];
-    state.editor.comments[sandboxId][newComment.id] = newComment;
-    if (open) actions.editor.getComment({ id: newComment.id, sandboxId });
-  } catch (error) {
-    effects.notificationToast.error(
-      'Unable to create your comment, please try again'
-    );
-    delete state.editor.comments[sandboxId][id];
+      delete state.editor.comments[sandboxId][id];
+      state.editor.comments[sandboxId][newComment.id] = newComment;
+      if (open) actions.editor.getComment({ id: newComment.id, sandboxId });
+    } catch (error) {
+      effects.notificationToast.error(
+        'Unable to create your comment, please try again'
+      );
+      delete state.editor.comments[sandboxId][id];
+    }
   }
 };
 
 export const deleteComment: AsyncAction<{
   id: string;
 }> = async ({ state, effects }, { id }) => {
-  if (!state.editor.currentSandbox) {
-    return;
-  }
-  const sandboxId = state.editor.currentSandbox.id;
-  const deletedComment = state.editor.comments[sandboxId][id];
+  if (state.editor.currentSandbox) {
+    const sandboxId = state.editor.currentSandbox.id;
+    const deletedComment = state.editor.comments[sandboxId][id];
 
-  delete state.editor.comments[sandboxId][id];
+    delete state.editor.comments[sandboxId][id];
 
-  try {
-    await effects.fakeGql.mutations.deleteComment({
-      id,
-    });
-  } catch (error) {
-    effects.notificationToast.error(
-      'Unable to delete your comment, please try again'
-    );
-    state.editor.comments[sandboxId][id] = deletedComment;
+    try {
+      await effects.fakeGql.mutations.deleteComment({
+        id,
+      });
+    } catch (error) {
+      effects.notificationToast.error(
+        'Unable to delete your comment, please try again'
+      );
+      state.editor.comments[sandboxId][id] = deletedComment;
+    }
   }
 };
 
@@ -1474,32 +1451,33 @@ export const updateComment: AsyncAction<{
     isResolved: boolean;
   };
 }> = async ({ state, effects }, { id, data }) => {
-  if (!state.editor.currentSandbox) {
-    return;
-  }
-  const sandboxId = state.editor.currentSandbox.id;
-  const isResolved = state.editor.comments[sandboxId][id].isResolved;
-  const comment = state.editor.comments[sandboxId][id].originalMessage.content;
+  if (state.editor.currentSandbox) {
+    const sandboxId = state.editor.currentSandbox.id;
+    const isResolved = state.editor.comments[sandboxId][id].isResolved;
+    const comment =
+      state.editor.comments[sandboxId][id].originalMessage.content;
 
-  if ('isResolved' in data) {
-    state.editor.comments[sandboxId][id].isResolved = data.isResolved;
-  }
+    if ('isResolved' in data) {
+      state.editor.comments[sandboxId][id].isResolved = data.isResolved;
+    }
 
-  if ('comment' in data) {
-    state.editor.comments[sandboxId][id].originalMessage.content = data.comment;
-  }
+    if ('comment' in data) {
+      state.editor.comments[sandboxId][id].originalMessage.content =
+        data.comment;
+    }
 
-  try {
-    await effects.fakeGql.mutations.updateComment({
-      id,
-      ...data,
-    });
-  } catch (error) {
-    effects.notificationToast.error(
-      'Unable to update your comment, please try again'
-    );
-    state.editor.comments[sandboxId][id].isResolved = isResolved;
-    state.editor.comments[sandboxId][id].originalMessage.content = comment;
+    try {
+      await effects.fakeGql.mutations.updateComment({
+        id,
+        ...data,
+      });
+    } catch (error) {
+      effects.notificationToast.error(
+        'Unable to update your comment, please try again'
+      );
+      state.editor.comments[sandboxId][id].isResolved = isResolved;
+      state.editor.comments[sandboxId][id].originalMessage.content = comment;
+    }
   }
 };
 
@@ -1508,6 +1486,35 @@ export const selectCommentsFilter: Action<CommentsFilterOption> = (
   option
 ) => {
   state.editor.selectedCommentsFilter = option;
+};
+
+export const changeInvitationAuthorization: AsyncAction<{
+  invitationId: string;
+  authorization: Authorization;
+  sandboxId: string;
+}> = async ({ state, effects }, { invitationId, sandboxId, authorization }) => {
+  const existingInvitation = state.editor.invitations.find(
+    c => c.id === invitationId
+  );
+
+  let oldAuthorization: Authorization | null = null;
+  if (existingInvitation) {
+    oldAuthorization = existingInvitation.authorization;
+
+    existingInvitation.authorization = authorization;
+  }
+
+  try {
+    await effects.gql.mutations.changeSandboxInvitationAuthorization({
+      sandboxId,
+      authorization,
+      invitationId,
+    });
+  } catch (e) {
+    if (existingInvitation && oldAuthorization) {
+      existingInvitation.authorization = oldAuthorization;
+    }
+  }
 };
 
 export const addReply: AsyncAction<string> = async (
@@ -1543,34 +1550,5 @@ export const addReply: AsyncAction<string> = async (
       ...state.editor.comments[sandboxId][id],
       replies: state.editor.currentComment.replies.filter(a => a.id !== fakeId),
     };
-  }
-};
-
-export const changeInvitationAuthorization: AsyncAction<{
-  invitationId: string;
-  authorization: Authorization;
-  sandboxId: string;
-}> = async ({ state, effects }, { invitationId, sandboxId, authorization }) => {
-  const existingInvitation = state.editor.invitations.find(
-    c => c.id === invitationId
-  );
-
-  let oldAuthorization: Authorization | null = null;
-  if (existingInvitation) {
-    oldAuthorization = existingInvitation.authorization;
-
-    existingInvitation.authorization = authorization;
-  }
-
-  try {
-    await effects.gql.mutations.changeSandboxInvitationAuthorization({
-      sandboxId,
-      authorization,
-      invitationId,
-    });
-  } catch (e) {
-    if (existingInvitation && oldAuthorization) {
-      existingInvitation.authorization = oldAuthorization;
-    }
   }
 };
