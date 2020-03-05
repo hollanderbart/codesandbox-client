@@ -69,15 +69,13 @@ export const Dialog = props => {
           <Stack
             className="handle"
             justify="space-between"
-            padding={2}
-            paddingLeft={4}
+            align="center"
+            padding={4}
+            paddingRight={2}
             css={{ cursor: 'move' }}
-            marginBottom={4}
+            marginBottom={2}
           >
-            <Stack align="center" gap={2}>
-              <Avatar user={comment.originalMessage.author} />
-              <Text size={3}>{comment.originalMessage.author.username}</Text>
-            </Stack>
+            <Text weight="semibold">Comment</Text>
 
             <Stack align="center">
               <IconButton
@@ -90,7 +88,16 @@ export const Dialog = props => {
           </Stack>
           {comment && (
             <>
-              <Comment source={comment.originalMessage.content} />
+              <Element paddingX={4}>
+                <Stack align="center" gap={2}>
+                  <Avatar user={comment.originalMessage.author} />
+                  <Text size={3}>
+                    {comment.originalMessage.author.username}
+                  </Text>
+                </Stack>
+                <Comment source={comment.originalMessage.content} />
+              </Element>
+
               {comment.replies.map(c => (
                 <>
                   <Element

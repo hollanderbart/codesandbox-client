@@ -60,9 +60,15 @@ const MenuButton = props => (
   </Button>
 );
 
-const MenuIconButton = props => (
-  <IconButton as={ReachMenu.MenuButton} {...props} />
-);
+const MenuIconButton = props => {
+  const onClick = event => {
+    // Icon menu button is usually on top of another element
+    // we don't want to trigger the on click of the parent
+    event.stopPropagation();
+    props.onClick(event);
+  };
+  return <IconButton as={ReachMenu.MenuButton} {...props} onClick={onClick} />;
+};
 
 const MenuList = props => (
   <List as={ReachMenu.MenuList} data-component="MenuList" {...props}>
