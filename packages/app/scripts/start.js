@@ -282,7 +282,7 @@ function runDevServer(port, protocol, index) {
     https: protocol === 'https',
     // contentBase: paths.staticPath,
     host: process.env.LOCAL_SERVER ? 'localhost' : 'codesandbox.test',
-    disableHostCheck: !process.env.LOCAL_SERVER,
+    disableHostCheck: true,
     contentBase: false,
     clientLogLevel: 'warning',
     overlay: true,
