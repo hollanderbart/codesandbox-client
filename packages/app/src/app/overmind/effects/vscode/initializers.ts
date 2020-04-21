@@ -1,6 +1,8 @@
 import JSON5 from 'json5';
 import codeSandboxTheme from '@codesandbox/common/lib/themes/codesandbox.json';
 import codeSandboxBlackTheme from '@codesandbox/common/lib/themes/codesandbox-black';
+import { notificationState } from '@codesandbox/common/lib/utils/notifications';
+import { NotificationStatus } from '@codesandbox/notifications';
 
 export function initializeThemeCache() {
   try {
@@ -38,6 +40,7 @@ export function initializeSettings() {
           'editor.minimap.enabled': false,
           'workbench.editor.openSideBySideDirection': 'down',
           'svelte.plugin.typescript.diagnostics.enable': false,
+          'typescript.locale': 'en',
         },
         null,
         2
@@ -69,6 +72,7 @@ export function initializeSettings() {
     settingsChanged = changeIfNeeded('javascript.autoClosingTags', false);
     settingsChanged = changeIfNeeded('typescript.autoClosingTags', false);
     settingsChanged = changeIfNeeded('html.autoClosingTags', false);
+    settingsChanged = changeIfNeeded('typescript.locale', 'en');
     settingsChanged = changeIfNeeded(
       'typescript.tsserver.useSeparateSyntaxServer',
       false
@@ -174,7 +178,25 @@ export function initializeCustomTheme() {
   const customTheme = localStorage.getItem('settings.manualCustomVSCodeTheme');
 
   if (customTheme) {
-    installCustomTheme('custom', 'Custom Theme', customTheme);
+    try {
+      installCustomTheme('custom', 'Custom Theme', JSON.parse(customTheme));
+    } catch (e) {
+      notificationState.addNotification({
+        title: 'Something went wrong while installing the custom extension',
+        message: e.message,
+        status: NotificationStatus.ERROR,
+        actions: {
+          primary: [
+            {
+              label: 'Clear Custom Theme',
+              run: () => {
+                localStorage.removeItem('settings.manualCustomVSCodeTheme');
+              },
+            },
+          ],
+        },
+      });
+    }
   }
 }
 
